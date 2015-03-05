@@ -60,7 +60,9 @@ from swift.common.utils import mkdirs, Timestamp, \
     storage_directory, hash_path, renamer, fallocate, fsync, fdatasync, \
     fsync_dir, drop_buffer_cache, ThreadPool, lock_path, write_pickle, \
     config_true_value, listdir, split_path, ismount, remove_file, \
-    get_md5_socket, F_SETPIPE_SZ, decode_timestamps, encode_timestamps
+    get_md5_socket, F_SETPIPE_SZ, decode_timestamps, encode_timestamps, \
+    tpool_reraise, link_fd_to_path, o_tmpfile_supported, \
+    O_TMPFILE, makedirs_count
 from swift.common.splice import splice, tee
 from swift.common.exceptions import DiskFileQuarantined, DiskFileNotExist, \
     DiskFileCollision, DiskFileNoSpace, DiskFileDeviceUnavailable, \
@@ -560,6 +562,7 @@ class BaseDiskFileManager(object):
                 with open('/proc/sys/fs/pipe-max-size') as f:
                     max_pipe_size = int(f.read())
                 self.pipe_size = min(max_pipe_size, self.disk_chunk_size)
+        self.use_linkat = o_tmpfile_supported()
 
     def make_on_disk_filename(self, timestamp, ext=None,
                               ctype_timestamp=None, *a, **kw):
@@ -1137,7 +1140,8 @@ class BaseDiskFileManager(object):
         return self.diskfile_cls(self, dev_path, self.threadpools[device],
                                  partition, account, container, obj,
                                  policy=policy, use_splice=self.use_splice,
-                                 pipe_size=self.pipe_size, **kwargs)
+                                 pipe_size=self.pipe_size,
+                                 use_linkat=self.use_linkat, **kwargs)
 
     def object_audit_location_generator(self, device_dirs=None,
                                         auditor_type="ALL"):
@@ -1434,9 +1438,15 @@ class BaseDiskFileWriter(object):
         # clean).
         drop_buffer_cache(self._fd, 0, self._upload_size)
         self.manager.invalidate_hash(dirname(self._datadir))
-        # After the rename completes, this object will be available for other
+        # After the rename/linkat completes, this object will be available for
         # requests to reference.
-        renamer(self._tmppath, target_path)
+        if self._tmppath:
+            # It was a named temp file created by mkstemp()
+            renamer(self._tmppath, target_path)
+        else:
+            # It was an unnamed temp file created by open() with O_TMPFILE
+            link_fd_to_path(self._fd, target_path,
+                            self._diskfile._dirs_created)
         # If rename is successful, flag put as succeeded. This is done to avoid
         # unnecessary os.unlink() of tempfile later. As renamer() has
         # succeeded, the tempfile would no longer exist at its original path.
@@ -1834,13 +1844,15 @@ class BaseDiskFile(object):
     :param policy: the StoragePolicy instance
     :param use_splice: if true, use zero-copy splice() to send data
     :param pipe_size: size of pipe buffer used in zero-copy operations
+    :param use_linkat: if True, use open() with linkat() to create obj file
     """
     reader_cls = None  # must be set by subclasses
     writer_cls = None  # must be set by subclasses
 
     def __init__(self, mgr, device_path, threadpool, partition,
                  account=None, container=None, obj=None, _datadir=None,
-                 policy=None, use_splice=False, pipe_size=None, **kwargs):
+                 policy=None, use_splice=False, pipe_size=None,
+                 use_linkat=False, **kwargs):
         self._manager = mgr
         self._device_path = device_path
         self._threadpool = threadpool or ThreadPool(nthreads=0)
@@ -1849,6 +1861,14 @@ class BaseDiskFile(object):
         self._bytes_per_sync = mgr.bytes_per_sync
         self._use_splice = use_splice
         self._pipe_size = pipe_size
+        self._use_linkat = use_linkat
+        # This might look a lttle hacky i.e tracking number of newly created
+        # dirs to fsync only those many later. If there is a better way,
+        # please suggest.
+        # Or one could consider getting rid of doing fsyncs on dirs altogether
+        # and mounting XFS with the 'dirsync' mount option which should result
+        # in all entry fops being carried out synchronously.
+        self._dirs_created = 0
         self.policy = policy
         if account and container and obj:
             self._name = '/' + '/'.join((account, container, obj))
@@ -2343,6 +2363,28 @@ class BaseDiskFile(object):
         self._fp = None
         return dr
 
+    def _get_tempfile(self):
+        fallback_to_mkstemp = False
+        tmppath = None
+        if self._use_linkat:
+            self._dirs_created = makedirs_count(self._datadir)
+            try:
+                fd = os.open(self._datadir, O_TMPFILE | os.O_WRONLY)
+            except OSError as err:
+                if err.errno in (errno.EOPNOTSUPP, errno.EISDIR, errno.EINVAL):
+                    msg = 'open(%s, O_TMPFILE | O_WRONLY) failed: %s \
+                           Falling back to using mkstemp()' \
+                           % (self._datadir, os.strerror(err.errno))
+                    self._logger.warning(msg)
+                    fallback_to_mkstemp = True
+                else:
+                    raise
+        if not self._use_linkat or fallback_to_mkstemp:
+            if not exists(self._tmpdir):
+                mkdirs(self._tmpdir)
+            fd, tmppath = mkstemp(dir=self._tmpdir)
+        return fd, tmppath
+
     @contextmanager
     def create(self, size=None):
         """
@@ -2359,10 +2401,8 @@ class BaseDiskFile(object):
                      disk
         :raises DiskFileNoSpace: if a size is specified and allocation fails
         """
-        if not exists(self._tmpdir):
-            mkdirs(self._tmpdir)
         try:
-            fd, tmppath = mkstemp(dir=self._tmpdir)
+            fd, tmppath = self._get_tempfile()
         except OSError as err:
             if err.errno in (errno.ENOSPC, errno.EDQUOT):
                 # No more inodes in filesystem
@@ -2393,7 +2433,9 @@ class BaseDiskFile(object):
                 # dfw.put_succeeded is set to True after renamer() succeeds in
                 # DiskFileWriter._finalize_put()
                 try:
-                    os.unlink(tmppath)
+                    if tmppath:
+                        # when mkstemp() was used
+                        os.unlink(tmppath)
                 except OSError:
                     self._logger.exception('Error removing tempfile: %s' %
                                            tmppath)

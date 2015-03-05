@@ -49,6 +49,7 @@ import six.moves.cPickle as pickle
 from gzip import GzipFile
 import mock as mocklib
 import inspect
+from nose import SkipTest
 
 EMPTY_ETAG = md5().hexdigest()
 
@@ -1052,6 +1053,15 @@ def mocked_http_conn(*args, **kwargs):
 
 def make_timestamp_iter():
     return iter(Timestamp(t) for t in itertools.count(int(time.time())))
+
+
+def requires_o_tmpfile_support(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        if not utils.o_tmpfile_supported():
+            raise SkipTest('Requires O_TMPFILE support')
+        return func(*args, **kwargs)
+    return wrapper
 
 
 def encode_frag_archive_bodies(policy, body):
