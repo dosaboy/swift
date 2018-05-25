@@ -204,8 +204,13 @@ class ContainerUpdater(Daemon):
         for root, dirs, files in os.walk(path):
             for file in files:
                 if file.endswith('.db'):
-                    self.process_container(os.path.join(root, file))
-                    time.sleep(self.slowdown)
+                    dbfile = os.path.join(root, file)
+                    try:
+                        self.process_container(dbfile)
+                        time.sleep(self.slowdown)
+                    except (Exception, Timeout) as e:
+                        self.logger.exception(
+                            "Error processing container %s: %s", dbfile, e)
 
     def process_container(self, dbfile):
         """
