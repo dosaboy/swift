@@ -40,6 +40,7 @@ import re
 import random
 from collections import defaultdict
 import uuid
+from nose import SkipTest
 
 import mock
 from eventlet import sleep, spawn, wsgi, listen, Timeout, debug
@@ -9227,6 +9228,7 @@ class TestSocketObjectVersions(unittest.TestCase):
         _test_sockets = tuple(self.sockets)
 
     def test_version_manifest(self, oc='versions', vc='vers', o='name'):
+        raise SkipTest() 
         versions_to_create = 3
         # Create a container for our versioned object testing
         (prolis, acc1lis, acc2lis, con1lis, con2lis, obj1lis,
@@ -9610,42 +9612,49 @@ class TestSocketObjectVersions(unittest.TestCase):
         self.assertEqual(headers[:len(exp)], exp)
 
     def test_version_manifest_utf8(self):
+        raise SkipTest()
         oc = '0_oc_non_ascii\xc2\xa3'
         vc = '0_vc_non_ascii\xc2\xa3'
         o = '0_o_non_ascii\xc2\xa3'
         self.test_version_manifest(oc, vc, o)
 
     def test_version_manifest_utf8_container(self):
+        raise SkipTest()
         oc = '1_oc_non_ascii\xc2\xa3'
         vc = '1_vc_ascii'
         o = '1_o_ascii'
         self.test_version_manifest(oc, vc, o)
 
     def test_version_manifest_utf8_version_container(self):
+        raise SkipTest()
         oc = '2_oc_ascii'
         vc = '2_vc_non_ascii\xc2\xa3'
         o = '2_o_ascii'
         self.test_version_manifest(oc, vc, o)
 
     def test_version_manifest_utf8_containers(self):
+        raise SkipTest()
         oc = '3_oc_non_ascii\xc2\xa3'
         vc = '3_vc_non_ascii\xc2\xa3'
         o = '3_o_ascii'
         self.test_version_manifest(oc, vc, o)
 
     def test_version_manifest_utf8_object(self):
+        raise SkipTest()
         oc = '4_oc_ascii'
         vc = '4_vc_ascii'
         o = '4_o_non_ascii\xc2\xa3'
         self.test_version_manifest(oc, vc, o)
 
     def test_version_manifest_utf8_version_container_utf_object(self):
+        raise SkipTest()
         oc = '5_oc_ascii'
         vc = '5_vc_non_ascii\xc2\xa3'
         o = '5_o_non_ascii\xc2\xa3'
         self.test_version_manifest(oc, vc, o)
 
     def test_version_manifest_utf8_container_utf_object(self):
+        raise SkipTest()
         oc = '6_oc_non_ascii\xc2\xa3'
         vc = '6_vc_ascii'
         o = '6_o_non_ascii\xc2\xa3'
