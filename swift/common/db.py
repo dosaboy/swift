@@ -205,7 +205,7 @@ class DatabaseBroker(object):
         self.conn = None
         self.db_file = db_file
         self.pending_file = self.db_file + '.pending'
-        self.pending_timeout = pending_timeout or 10
+        self.pending_timeout = pending_timeout or 120
         self.stale_reads_ok = stale_reads_ok
         self.db_dir = os.path.dirname(db_file)
         self.timeout = timeout
